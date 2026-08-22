@@ -259,19 +259,33 @@ void AudioCapture::WorkerUpdate()
 		capture_pids.insert(key.pid);
 	}
 
-	if (config.exclude && exclude_pids.size() > 0) {
-		// Windows can capture "everything except this process tree" natively,
-		// with a single client. That is both cheaper than one helper per
-		// application and more complete: it also covers system sounds and
-		// anything that never shows up as a tracked audio session.
-		//
-		// The API takes a single target, so this only applies when the
-		// excluded executables resolve to one process tree; otherwise fall
-		// back to enumerating everything that should be captured.
-		auto excluded_roots = AudioCapture::DeDuplicateCaptureList(exclude_pids);
+	if (config.exclude) {
+		if (exclude_pids.size() > 0) {
+			// Windows can capture "everything except this process tree"
+			// natively, with a single client. That is both cheaper than one
+			// helper per application and more complete: it also covers
+			// system sounds and anything that never shows up as a tracked
+			// audio session.
+			//
+			// The API takes a single target, so this only applies when the
+			// excluded executables resolve to one process tree; otherwise
+			// fall back to enumerating everything that should be captured.
+			auto excluded_roots = AudioCapture::DeDuplicateCaptureList(exclude_pids);
 
-		if (excluded_roots.size() == 1) {
-			StartCapture(excluded_roots, true);
+			if (excluded_roots.size() == 1) {
+				StartCapture(excluded_roots, true);
+				return;
+			}
+		} else {
+			// None of the excluded executables is running. Enumerating
+			// sessions here (like the multi-tree case below) would make the
+			// capture depend on whether the excluded application is alive:
+			// system sounds and sessionless applications would drop out
+			// until it starts playing. Keep the native whole-system capture
+			// by excluding our own process tree instead - it always exists,
+			// can never match a target, and keeps OBS's own audio
+			// monitoring out of the capture.
+			StartCapture({GetCurrentProcessId()}, true);
 			return;
 		}
 	}
