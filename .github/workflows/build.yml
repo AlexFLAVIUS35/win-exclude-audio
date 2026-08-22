@@ -52,9 +52,14 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
 
           # portable zip: extract into <obs>/... or %ProgramData%/obs-studio/plugins/
+          # Named with the project version so it matches the installer and release
+          # downloads from different versions stay distinguishable.
+          $m = Select-String CMakeLists.txt -Pattern 'project\(win-capture-audio VERSION ([0-9.]+)'
+          if (-not $m) { throw "Could not read the project version from CMakeLists.txt" }
+          $version = $m.Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force stage/win-capture-audio | Out-Null
           Copy-Item build/release/* stage/win-capture-audio -Recurse
-          Compress-Archive stage/win-capture-audio dist/win-capture-audio.zip
+          Compress-Archive stage/win-capture-audio "dist/win-capture-audio-$version.zip"
 
           # setup installer (Inno Setup is preinstalled on windows-latest)
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Odist build\installer.generated.iss
