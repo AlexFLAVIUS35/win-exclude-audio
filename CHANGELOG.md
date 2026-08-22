@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.3.1 — unreleased
+
+### Fixed
+
+- **Exclude mode no longer depends on the excluded application being alive.**
+  When none of the excluded executables is running, the plugin previously fell
+  back to enumerating audio sessions one by one, silently dropping system
+  sounds and applications without a tracked session until the excluded
+  application started playing — at which point the capture switched to the
+  native whole-system path and those sources reappeared. Now the native
+  `EXCLUDE_TARGET_PROCESS_TREE` capture stays active in that case too,
+  targeting OBS's own process tree (which also keeps OBS's audio monitoring
+  out of the capture). What you hear no longer changes with the excluded
+  application's lifecycle.
+- **A non-COM exception in a capture thread could crash all of OBS.** The
+  capture thread's retry wrapper only caught `wil::ResultException`; anything
+  else (e.g. `std::bad_alloc` while buffering) escaped the thread and
+  terminated the process. The net is now as wide as the session monitor's.
+- **The status line now names the captured executable in hotkey mode.** The
+  captured root process (a browser or game-launcher main process) often has no
+  audio session of its own — the sessions belong to child processes — so the
+  status fell back to "1 pid(s)". The root's image name is now resolved
+  directly ("Capturing: chrome.exe"); the pid count remains only for protected
+  processes that cannot be opened.
+- **Opening the properties dialog no longer stops an active hotkey capture.**
+  Any settings update rebuilt the runtime config with an empty captured-window
+  handle, so merely inspecting the source's properties silently deactivated
+  the capture the hotkey had started. The captured window now survives
+  settings updates; only the deactivate hotkey (or the window going away)
+  stops it.
+- **Capture retries now back off.** A helper whose target is permanently gone
+  (hotkey mode, where no session event cleans it up) retried every 2 seconds
+  forever, spamming the log. Retries now double up to 60 seconds — and reset
+  as soon as a capture runs, so re-attach after a device change stays prompt.
+
+### Build / CI
+
+- The portable release zip is now versioned
+  (`win-capture-audio-<version>.zip`), matching the installer's naming.
+
 ## 2.3.0 — 2026-07-28
 
 Modernization release: builds and runs against OBS Studio 32.x on current Windows 10/11.
