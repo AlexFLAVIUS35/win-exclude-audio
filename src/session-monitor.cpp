@@ -187,6 +187,29 @@ void SessionMonitor::UnInit()
 		enumerator->UnregisterEndpointNotificationCallback(&device_notification_client);
 }
 
+void SessionMonitor::DrainQueue()
+{
+	// Messages still queued when the worker exits own heap payloads (see the
+	// notification clients): release them instead of leaking at shutdown.
+	MSG msg;
+	while (PeekMessageA(&msg, reinterpret_cast<HWND>(-1), 0, 0, PM_REMOVE)) {
+		switch (msg.message) {
+		case SessionEvents::DeviceAdded:
+		case SessionEvents::DeviceRemoved:
+			delete reinterpret_cast<std::wstring *>(msg.wParam);
+			break;
+
+		case SessionEvents::SessionAdded:
+			reinterpret_cast<IAudioSessionControl *>(msg.wParam)->Release();
+			break;
+
+		case SessionEvents::SessionExpired:
+			delete reinterpret_cast<SessionKey *>(msg.wParam);
+			break;
+		}
+	}
+}
+
 void SessionMonitor::AddDevice(MSG msg)
 {
 	std::unique_ptr<std::wstring> id(reinterpret_cast<std::wstring *>(msg.wParam));
@@ -280,9 +303,6 @@ void SessionMonitor::RemoveSession(MSG msg)
 	if (!session_watchers.contains(*session_key))
 		return;
 
-	auto &session = session_watchers.at(*session_key);
-
-	auto executable = session.GetExecutable();
 	auto num_removed = session_watchers.erase(*session_key);
 
 	if (num_removed == 0)
@@ -325,6 +345,7 @@ void SessionMonitor::Run()
 		// half-registered COM callbacks behind.
 		error("session monitor init failed: %s", e.what());
 		UnInit();
+		DrainQueue();
 		return;
 	}
 
@@ -369,6 +390,7 @@ void SessionMonitor::Run()
 	}
 
 	UnInit();
+	DrainQueue();
 }
 
 void SessionMonitor::SafeRun()
@@ -387,7 +409,6 @@ SessionMonitor::SessionMonitor()
 	// Run() publishes worker_tid; wait for it so Instance() users can safely
 	// register callbacks the moment Create() returns.
 	worker_ready.wait();
-	worker_tid = GetThreadId(worker_thread.native_handle());
 }
 
 SessionMonitor::~SessionMonitor()

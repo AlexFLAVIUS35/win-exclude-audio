@@ -116,7 +116,7 @@ static std::unordered_map<DWORD, DWORD> GetProcessParents(const std::set<DWORD> 
 
 std::set<DWORD>
 AudioCapture::DeDuplicateCaptureList(const std::set<DWORD> &pids,
-				     const std::set<DWORD> &exclude_pids = std::set<DWORD>())
+				     const std::set<DWORD> &exclude_pids)
 {
 	std::set<DWORD> all_pids = pids;
 	all_pids.insert(exclude_pids.begin(), exclude_pids.end());

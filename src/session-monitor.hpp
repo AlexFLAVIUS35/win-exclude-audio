@@ -237,6 +237,7 @@ private:
 
 	void Init();
 	void UnInit();
+	void DrainQueue();
 
 	void AddDevice(MSG msg);
 	void AddDevice(std::wstring id, wil::com_ptr<IMMDevice> device);

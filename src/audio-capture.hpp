@@ -87,7 +87,6 @@ private:
 	obs_hotkey_pair_id hotkey_pair;
 	obs_source_t *source;
 
-	WAVEFORMATEX format;
 	std::optional<Mixer> mixer;
 
 	// Owned by the worker thread; pids_section guards the writes so the UI
@@ -111,7 +110,7 @@ public:
 	obs_source_t *GetSource() { return source; }
 
 	static std::set<DWORD> DeDuplicateCaptureList(const std::set<DWORD> &pids,
-						      const std::set<DWORD> &exclude);
+						      const std::set<DWORD> &exclude = {});
 
 	void Update(obs_data_t *settings);
 
