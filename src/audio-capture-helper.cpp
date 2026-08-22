@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <functional>
 #include <windows.h>
 
@@ -205,25 +206,44 @@ void AudioCaptureHelper::CaptureSafe()
 	// that constructed us.
 	auto couninit = wil::CoInitializeEx();
 
+	// The stream dies when the device changes or the target exits
+	// (AUDCLNT_E_DEVICE_INVALIDATED and friends). Retry until we are shut
+	// down; if the session is truly gone the SessionMonitor will destroy us
+	// shortly anyway. Hotkey mode has no such supervisor: a target that dies
+	// without ever owning an audio session leaves us failing forever, so back
+	// off instead of hammering the log every two seconds indefinitely.
+	DWORD retry_delay = 2000;
+	constexpr DWORD max_retry_delay = 60000;
+	constexpr ULONGLONG live_capture_threshold = 10000;
+
 	while (true) {
+		auto capture_start = GetTickCount64();
+
 		try {
 			Capture();
 			return;
 		} catch (const wil::ResultException &e) {
 			error("capture failed for pid %lu: %s", pid, e.what());
+		} catch (const std::exception &e) {
+			// Anything escaping this thread would std::terminate all of
+			// OBS; keep the net as wide as the session monitor's.
+			error("capture failed for pid %lu: %s", pid, e.what());
 		}
 
-		// The stream dies when the device changes or the target exits
-		// (AUDCLNT_E_DEVICE_INVALIDATED and friends). Retry until we are
-		// shut down; if the session is truly gone the SessionMonitor will
-		// destroy us shortly anyway.
+		// A capture that ran for a while before dying is a fresh failure
+		// (device change, target exit), not another round of the same one:
+		// re-attach promptly instead of continuing a grown backoff.
+		if (GetTickCount64() - capture_start >= live_capture_threshold)
+			retry_delay = 2000;
+
 		client = nullptr;
 		capture_client = nullptr;
 
-		if (WaitForSingleObject(events[HelperEvents::Shutdown].get(), 2000) == WAIT_OBJECT_0)
+		if (WaitForSingleObject(events[HelperEvents::Shutdown].get(), retry_delay) == WAIT_OBJECT_0)
 			return;
 
 		info("retrying capture for pid %lu", pid);
+		retry_delay = std::min(retry_delay * 2, max_retry_delay);
 	}
 }
 
