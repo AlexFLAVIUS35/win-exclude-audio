@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
     tags: ['*']
+    # Documentation-only pushes have nothing to compile. Path filters are not
+    # evaluated for tag pushes, so releases always build regardless.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'media/**'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
   workflow_dispatch:
 
