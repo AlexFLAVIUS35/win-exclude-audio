@@ -16,6 +16,7 @@
 #include <audiopolicy.h>
 #include <audioclientactivationparams.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 
 #include <obs.h>
 #include <obs-module.h>
@@ -717,10 +718,38 @@ void AudioCapture::UpdateStatus(obs_properties_t *ps)
 			names.insert(executable);
 	}
 
+	if (names.empty()) {
+		// No audio session carries the captured pid. Typical in hotkey
+		// mode: the captured root is a browser/game launcher main process
+		// whose audio sessions belong to child processes (the tree is
+		// still captured). Resolve the root's own image name so the
+		// status shows an executable instead of a bare pid count.
+		for (auto pid : captured) {
+			wil::unique_process_handle process{
+				OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)};
+			if (!process)
+				continue;
+
+			wchar_t path[MAX_PATH] = {L'\0'};
+			if (!GetProcessImageFileNameW(process.get(), path, MAX_PATH))
+				continue;
+
+			char utf8[MAX_PATH * 4] = {'\0'};
+			os_wcs_to_utf8(path, 0, utf8, sizeof(utf8));
+
+			std::string name{utf8};
+			auto slash = name.find_last_of('\\');
+			if (slash != std::string::npos)
+				name = name.substr(slash + 1);
+
+			if (!name.empty())
+				names.insert(name);
+		}
+	}
+
 	std::string text = IsExcludeCapture() ? TEXT_STATUS_EXCLUDING : TEXT_STATUS_CAPTURING;
 	if (names.empty()) {
-		// Hotkey mode can capture a window whose process has no audio
-		// session entry yet.
+		// Protected process (OpenProcess denied): fall back to the count.
 		text += std::format(" {} pid(s)", captured.size());
 	} else {
 		bool first = true;
