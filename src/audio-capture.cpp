@@ -365,6 +365,10 @@ void AudioCapture::Update(obs_data_t *settings)
 		mixer->SetLowLatency(obs_data_get_int(settings, SETTING_LATENCY) == 1);
 
 	auto lock = config_section.lock();
+	// The captured window is runtime state set by the hotkey, not a setting:
+	// carry it across settings updates, or merely opening the properties
+	// dialog silently stops an active hotkey capture.
+	new_config.hotkey_window = config.hotkey_window;
 	config = std::move(new_config);
 	lock.reset();
 
