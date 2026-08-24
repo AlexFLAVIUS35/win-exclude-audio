@@ -40,11 +40,50 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 [Files]
 Source: "@RELEASE_DIR@/*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Old zip installs lived inside the OBS installation directory. OBS scans that
+; legacy location first, so a stale DLL left there would shadow this install
+; and the user would silently keep running the old version.
+Type: files;          Name: "{code:GetLegacyObsDir}\obs-plugins\64bit\win-capture-audio.dll"; Check: LegacyObsDirFound
+Type: files;          Name: "{code:GetLegacyObsDir}\obs-plugins\64bit\win-capture-audio.pdb"; Check: LegacyObsDirFound
+Type: filesandordirs; Name: "{code:GetLegacyObsDir}\data\obs-plugins\win-capture-audio";      Check: LegacyObsDirFound
+
 [Icons]
 Name: "{group}\{cm:ProgramOnTheWeb,{#MyAppName}}"; Filename: "{#MyAppURL}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Code]
+var
+  LegacyObsDir: String;
+  LegacyObsDirChecked: Boolean;
+
+// Locates the OBS Studio installation the same way the build does: registry
+// first, then the default Program Files location. Empty when not found or
+// when it does not look like a real OBS install.
+function GetObsDir(): String;
+begin
+  if not LegacyObsDirChecked then
+  begin
+    LegacyObsDirChecked := True;
+    if not RegQueryStringValue(HKLM64, 'SOFTWARE\OBS Studio', '', LegacyObsDir) then
+      if not RegQueryStringValue(HKLM32, 'SOFTWARE\OBS Studio', '', LegacyObsDir) then
+        LegacyObsDir := ExpandConstant('{commonpf64}\obs-studio');
+    if not FileExists(LegacyObsDir + '\bin\64bit\obs64.exe') then
+      LegacyObsDir := '';
+  end;
+  Result := LegacyObsDir;
+end;
+
+function LegacyObsDirFound(): Boolean;
+begin
+  Result := GetObsDir() <> '';
+end;
+
+function GetLegacyObsDir(Param: String): String;
+begin
+  Result := GetObsDir();
+end;
+
 function GetUninstallString(): String;
 var
   sUnInstPath: String;
