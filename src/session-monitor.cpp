@@ -37,27 +37,36 @@ DeviceWatcher::DeviceWatcher(std::wstring device_id, wil::com_ptr<IMMDevice> dev
 
 	THROW_IF_FAILED(manager2->RegisterSessionNotification(&session_notification_client));
 
-	THROW_IF_FAILED(manager2->GetSessionEnumerator(enumerator.put()));
+	// From here on a throw must undo the registration above, or WASAPI keeps
+	// calling into a callback whose owner was never fully constructed (the
+	// destructor does not run when the constructor throws).
+	try {
+		THROW_IF_FAILED(manager2->GetSessionEnumerator(enumerator.put()));
 
-	int num_sessions = 0;
-	THROW_IF_FAILED(enumerator->GetCount(&num_sessions));
+		int num_sessions = 0;
+		THROW_IF_FAILED(enumerator->GetCount(&num_sessions));
 
-	for (int i = 0; i < num_sessions; ++i) {
-		wil::com_ptr<IAudioSessionControl> session;
-		THROW_IF_FAILED(enumerator->GetSession(i, session.put()));
+		for (int i = 0; i < num_sessions; ++i) {
+			wil::com_ptr<IAudioSessionControl> session;
+			THROW_IF_FAILED(enumerator->GetSession(i, session.put()));
 
-		AudioSessionState state;
-		THROW_IF_FAILED(session->GetState(&state));
+			AudioSessionState state;
+			THROW_IF_FAILED(session->GetState(&state));
 
-		if (state != AudioSessionStateExpired) {
-			// One AddRef, owned by the posted message; AddSession takes
-			// it over. The second unconditional AddRef the old code did
-			// leaked every enumerated session.
-			session->AddRef();
-			if (!PostThreadMessageA(worker_tid, SessionEvents::SessionAdded,
-						reinterpret_cast<WPARAM>(session.get()), NULL))
-				session->Release();
+			if (state != AudioSessionStateExpired) {
+				// One AddRef, owned by the posted message; AddSession takes
+				// it over. The second unconditional AddRef the old code did
+				// leaked every enumerated session.
+				session->AddRef();
+				if (!PostThreadMessageA(worker_tid, SessionEvents::SessionAdded,
+							reinterpret_cast<WPARAM>(session.get()),
+							NULL))
+					session->Release();
+			}
 		}
+	} catch (...) {
+		manager2->UnregisterSessionNotification(&session_notification_client);
+		throw;
 	}
 }
 
@@ -227,8 +236,15 @@ void SessionMonitor::AddDevice(MSG msg)
 
 void SessionMonitor::AddDevice(std::wstring id, wil::com_ptr<IMMDevice> device)
 {
-	device_watchers.try_emplace(id, id, device, worker_tid);
-	debug("registered new device: %ls", id.c_str());
+	// One broken endpoint (half-removed device, misbehaving virtual cable)
+	// must not take down session monitoring for every other device - this
+	// runs both from startup enumeration and from hotplug events.
+	try {
+		device_watchers.try_emplace(id, id, device, worker_tid);
+		debug("registered new device: %ls", id.c_str());
+	} catch (const wil::ResultException &e) {
+		error("skipping device %ls: %s", id.c_str(), e.what());
+	}
 }
 
 void SessionMonitor::RemoveDevice(MSG msg)
