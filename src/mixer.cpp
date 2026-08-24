@@ -1,4 +1,5 @@
 #include "mixer.hpp"
+#include <util/util_uint64.h>
 #include "format-conversion.hpp"
 #include "wil/result_macros.h"
 #include <algorithm>
@@ -18,22 +19,33 @@ UINT64 Mixer::GetCurrentTimestamp()
 	return os_gettime_ns() / 100;
 }
 
+// Single-floor 128-bit conversions: the old two-step ns round-trips lost up
+// to ~100ns per call, and frames * 1e9 overflows UINT64 within days of
+// accumulated frames.
 std::size_t Mixer::DurationToFrames(UINT64 duration)
 {
-	UINT64 duration_ns = duration * 100;
-	return (duration_ns * format.nSamplesPerSec) / 1000000000;
+	return (std::size_t)util_mul_div64(duration, format.nSamplesPerSec, 10000000ULL);
 }
 
 UINT64 Mixer::FramesToDuration(std::size_t frames)
 {
-	UINT64 duration_ns = (frames * 1000000000) / format.nSamplesPerSec;
-	return duration_ns / 100;
+	return util_mul_div64(frames, 10000000ULL, format.nSamplesPerSec);
+}
+
+void Mixer::AdoptTimeline(UINT64 timestamp)
+{
+	// mix_timestamp is always re-derived as anchor + FramesToDuration(total
+	// consumed frames) - one floor of one product from a fixed origin - so
+	// per-tick rounding error cannot ratchet into gaps or timestamp drift.
+	mix_timestamp = timestamp;
+	timeline_anchor = timestamp;
+	timeline_frames = 0;
 }
 
 void Mixer::ProcessInput(UINT64 input_timestamp, std::vector<float> &input_buffer)
 {
 	if (mix.size() == 0) {
-		mix_timestamp = input_timestamp;
+		AdoptTimeline(input_timestamp);
 		mix = std::move(input_buffer);
 
 		return;
@@ -61,7 +73,7 @@ void Mixer::ProcessInput(UINT64 input_timestamp, std::vector<float> &input_buffe
 	const std::size_t max_mix_samples = format.nChannels * DurationToFrames(5000 * ms_in_ts);
 	if (offset + input_buffer.size() > max_mix_samples) {
 		warn("mix buffer overflow - resetting");
-		mix_timestamp = input_timestamp;
+		AdoptTimeline(input_timestamp);
 		mix = std::move(input_buffer);
 		return;
 	}
@@ -147,7 +159,8 @@ void Mixer::Tick()
 	// on every tick (100x per second).
 	mix.erase(mix.begin(), mix.begin() + end * format.nChannels);
 
-	mix_timestamp += FramesToDuration(end);
+	timeline_frames += end;
+	mix_timestamp = timeline_anchor + FramesToDuration(timeline_frames);
 }
 
 void Mixer::Run()

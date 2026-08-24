@@ -48,6 +48,9 @@ private:
 	std::queue<std::tuple<UINT64, std::vector<float>>> input_queue;
 
 	UINT64 mix_timestamp = 0;
+	// Fixed origin of the current mix timeline (see AdoptTimeline).
+	UINT64 timeline_anchor = 0;
+	UINT64 timeline_frames = 0;
 	std::vector<float> mix;
 
 	UINT64 GetCurrentTimestamp();
@@ -57,6 +60,7 @@ private:
 	std::size_t TimestampToMixOffset(UINT64 timestamp);
 	std::tuple<std::size_t, std::size_t> CalculateCutoff(UINT64 timestamp);
 
+	void AdoptTimeline(UINT64 timestamp);
 	void ProcessInput(UINT64 input_timestamp, std::vector<float> &input_buffer);
 	void ProcessInput();
 
