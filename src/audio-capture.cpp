@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <string>
 #include <format>
@@ -35,25 +36,33 @@
 
 AudioCaptureHelperManager helper_manager;
 
-// Not a valid process id, so it can stand in for "no parent" without ever matching one.
-static constexpr DWORD NO_PARENT_PID = static_cast<DWORD>(-1);
-
-// Case-insensitive wildcard match: '*' spans any run, '?' any single character.
-// Windows filenames are case-insensitive, so "spotify.exe" must match
-// "Spotify.exe"; the old exact std::set lookup silently did not.
-static bool WildcardMatch(const char *pattern, const char *str)
+// Case folding must be Unicode-aware: executable names are UTF-8 and Windows
+// filenames case-fold beyond ASCII, so a byte-wise tolower() would fail to
+// match names containing accented or non-Latin letters.
+static std::wstring Utf8ToLowerWide(const char *utf8)
 {
-	const char *star = nullptr;
-	const char *star_str = nullptr;
+	int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	if (n <= 1)
+		return {};
+
+	std::wstring wide(static_cast<std::size_t>(n) - 1, L'\0');
+	MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide.data(), n);
+	CharLowerBuffW(wide.data(), static_cast<DWORD>(wide.size()));
+	return wide;
+}
+
+// Wildcard match over pre-folded wide strings: '*' spans any run, '?' any
+// single character.
+static bool WildcardMatch(const wchar_t *pattern, const wchar_t *str)
+{
+	const wchar_t *star = nullptr;
+	const wchar_t *star_str = nullptr;
 
 	while (*str) {
-		char p = (char)tolower((unsigned char)*pattern);
-		char s = (char)tolower((unsigned char)*str);
-
-		if (p == s || p == '?') {
+		if (*pattern == *str || *pattern == L'?') {
 			++pattern;
 			++str;
-		} else if (p == '*') {
+		} else if (*pattern == L'*') {
 			star = pattern++;
 			star_str = str;
 		} else if (star) {
@@ -64,106 +73,110 @@ static bool WildcardMatch(const char *pattern, const char *str)
 		}
 	}
 
-	while (*pattern == '*')
+	while (*pattern == L'*')
 		++pattern;
 
-	return *pattern == '\0';
+	return *pattern == L'\0';
 }
 
 static bool MatchesAnyExecutable(const std::set<std::string> &patterns, const std::string &executable)
 {
+	auto folded = Utf8ToLowerWide(executable.c_str());
+
 	for (const auto &pattern : patterns) {
-		if (WildcardMatch(pattern.c_str(), executable.c_str()))
+		if (WildcardMatch(Utf8ToLowerWide(pattern.c_str()).c_str(), folded.c_str()))
 			return true;
 	}
 
 	return false;
 }
 
-static std::unordered_map<DWORD, DWORD> GetProcessParents(const std::set<DWORD> &pids)
+// Full parent map of every process in the system. The map must cover
+// non-session processes too: a session pid's capture-relevant ancestor can sit
+// behind any number of session-less intermediates (game -> launcher -> child),
+// and a parents-of-sessions-only map cannot see across them.
+static std::unordered_map<DWORD, DWORD> GetProcessParents()
 {
 	std::unordered_map<DWORD, DWORD> parent_map;
 
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (snapshot == INVALID_HANDLE_VALUE) {
 		warn("CreateToolhelp32Snapshot failed (%lu)", GetLastError());
-	} else {
-		wil::unique_handle handle{snapshot};
-
-		PROCESSENTRY32W info;
-		info.dwSize = sizeof(PROCESSENTRY32W);
-
-		bool ret = Process32FirstW(handle.get(), &info);
-		while (ret) {
-			if (pids.contains(info.th32ProcessID))
-				parent_map[info.th32ProcessID] = info.th32ParentProcessID;
-
-			ret = Process32NextW(handle.get(), &info);
-		}
+		return parent_map;
 	}
 
-	// Processes that vanished between being listed as an audio session and this
-	// snapshot get a sentinel that can never collide with a real pid.
-	for (auto pid : pids) {
-		if (parent_map.contains(pid))
-			continue;
+	wil::unique_handle handle{snapshot};
 
-		parent_map[pid] = NO_PARENT_PID;
-	}
+	PROCESSENTRY32W info;
+	info.dwSize = sizeof(PROCESSENTRY32W);
+
+	for (bool ret = Process32FirstW(handle.get(), &info); ret;
+	     ret = Process32NextW(handle.get(), &info))
+		parent_map[info.th32ProcessID] = info.th32ParentProcessID;
 
 	return parent_map;
+}
+
+// Calls visit(ancestor) for each proper ancestor of pid, nearest first, until
+// visit returns true (found) or the chain ends. Bounded and cycle-guarded:
+// a stale snapshot can contain parent cycles from pid reuse.
+static bool AnyAncestor(const std::unordered_map<DWORD, DWORD> &parents, DWORD pid,
+			const std::function<bool(DWORD)> &visit)
+{
+	std::set<DWORD> seen;
+	DWORD current = pid;
+
+	for (int depth = 0; depth < 64; ++depth) {
+		auto it = parents.find(current);
+		if (it == parents.end())
+			return false;
+
+		DWORD parent = it->second;
+		if (parent == 0 || parent == current || !seen.insert(parent).second)
+			return false;
+
+		if (visit(parent))
+			return true;
+
+		current = parent;
+	}
+
+	return false;
 }
 
 std::set<DWORD>
 AudioCapture::DeDuplicateCaptureList(const std::set<DWORD> &pids,
 				     const std::set<DWORD> &exclude_pids)
 {
-	std::set<DWORD> all_pids = pids;
-	all_pids.insert(exclude_pids.begin(), exclude_pids.end());
+	auto parents = GetProcessParents();
 
-	auto parents = GetProcessParents(all_pids);
-
-	std::set<DWORD> uncaptured_pids = pids;
-	for (auto pid : exclude_pids)
-		uncaptured_pids.erase(parents[pid]);
-
-	// WASAPI process loopback captures the whole process tree, so a pid whose
-	// ancestor is already captured must not get its own capture root or its
-	// audio doubles. The old implementation erased from the set it was
-	// range-iterating (UB) and could spin forever on parent-pid cycles left by
-	// pid reuse; this version tracks covered descendants explicitly and always
-	// terminates.
-	std::set<DWORD> roots;
-	std::set<DWORD> covered;
-
-	while (!uncaptured_pids.empty()) {
-		std::set<DWORD> new_roots;
-		std::set<DWORD> new_covered;
-
-		for (auto pid : uncaptured_pids) {
-			auto parent = parents[pid];
-
-			if (roots.contains(parent) || covered.contains(parent))
-				new_covered.insert(pid);
-			else if (!uncaptured_pids.contains(parent))
-				new_roots.insert(pid);
-		}
-
-		if (new_roots.empty() && new_covered.empty()) {
-			// Parent cycle (stale snapshot / pid reuse): capture the
-			// remainder as roots rather than hanging the worker.
-			roots.insert(uncaptured_pids.begin(), uncaptured_pids.end());
-			break;
-		}
-
-		for (auto pid : new_roots)
-			uncaptured_pids.erase(pid);
-		for (auto pid : new_covered)
-			uncaptured_pids.erase(pid);
-
-		roots.insert(new_roots.begin(), new_roots.end());
-		covered.insert(new_covered.begin(), new_covered.end());
+	// WASAPI process loopback captures the whole process tree, so any
+	// candidate that is an ancestor of an excluded pid - at any depth, not
+	// just the direct parent - would pull the excluded audio back in.
+	std::set<DWORD> candidates = pids;
+	for (auto excluded : exclude_pids) {
+		AnyAncestor(parents, excluded, [&](DWORD ancestor) {
+			candidates.erase(ancestor);
+			return false;
+		});
 	}
+
+	// A candidate whose ancestor chain reaches another candidate is covered
+	// by that ancestor's capture; only chain-tops become capture roots.
+	std::set<DWORD> roots;
+	for (auto pid : candidates) {
+		bool covered = AnyAncestor(parents, pid, [&](DWORD ancestor) {
+			return candidates.contains(ancestor);
+		});
+
+		if (!covered)
+			roots.insert(pid);
+	}
+
+	// Snapshot-stale parent cycles could mark every candidate as covered by
+	// another; capture everything rather than silently capturing nothing.
+	if (roots.empty() && !candidates.empty())
+		return candidates;
 
 	return roots;
 }
@@ -252,6 +265,13 @@ void AudioCapture::WorkerUpdate()
 	std::set<DWORD> exclude_pids;
 
 	for (auto &[key, executable] : sessions) {
+		// In exclude mode, never treat OBS's own sessions (audio monitoring)
+		// as capturable: the enumeration fallback would otherwise feed OBS's
+		// output back into the capture. The native single-tree path already
+		// gets this right when it excludes our own process.
+		if (config.exclude && key.pid == GetCurrentProcessId())
+			continue;
+
 		if ((!MatchesAnyExecutable(config.executables, executable)) ^ config.exclude) {
 			exclude_pids.insert(key.pid);
 			continue;
@@ -346,7 +366,15 @@ void AudioCapture::Run()
 			break;
 		}
 
-		shutdown = Tick(msg);
+		// An escaping exception would std::terminate all of OBS; one failed
+		// update must not kill the worker for the rest of the session.
+		try {
+			shutdown = Tick(msg);
+		} catch (const wil::ResultException &e) {
+			error("failed to process event %u: %s", msg.message, e.what());
+		} catch (const std::exception &e) {
+			error("failed to process event %u: %s", msg.message, e.what());
+		}
 	}
 
 	StopCapture();
@@ -566,6 +594,8 @@ static bool executable_list_callback(void *data, obs_properties_t *ps, obs_prope
 				     obs_data_t *settings)
 {
 	auto *ctx = static_cast<AudioCapture *>(data);
+	if (!ctx)
+		return true;
 
 	auto *active_session_list = obs_properties_get(ps, SETTING_ACTIVE_SESSION_LIST);
 	auto *active_session_add = obs_properties_get(ps, SETTING_ACTIVE_SESSION_ADD);
@@ -580,6 +610,8 @@ static bool executable_list_callback(void *data, obs_properties_t *ps, obs_prope
 static bool session_refresh_callback(obs_properties_t *ps, obs_property_t *p, void *data)
 {
 	auto *ctx = static_cast<AudioCapture *>(data);
+	if (!ctx)
+		return true;
 
 	auto *active_session_list = obs_properties_get(ps, SETTING_ACTIVE_SESSION_LIST);
 	auto *active_session_add = obs_properties_get(ps, SETTING_ACTIVE_SESSION_ADD);
@@ -594,26 +626,49 @@ static bool session_refresh_callback(obs_properties_t *ps, obs_property_t *p, vo
 static bool session_add_callback(obs_properties_t *ps, obs_property_t *p, void *data)
 {
 	auto *ctx = static_cast<AudioCapture *>(data);
+	if (!ctx)
+		return false;
+
 	auto *source = ctx->GetSource();
-
 	auto *settings = obs_source_get_settings(source);
-	auto *executable_list_array = obs_data_get_array(settings, SETTING_EXECUTABLE_LIST);
 
-	if (obs_data_array_count(executable_list_array) == 0) {
+	// The combo's stored setting lags the widget: OBS only writes it when the
+	// selection is actively changed, so a fresh dialog shows the first entry
+	// while the setting is still empty (or holds a stale, no-longer-offered
+	// value). Add what the user actually sees: the stored value when it is a
+	// currently-addable executable, the first addable one otherwise.
+	auto addable = ctx->GetAddableExecutables(settings);
+	std::string executable = obs_data_get_string(settings, SETTING_ACTIVE_SESSION_LIST);
+
+	if (std::find(addable.begin(), addable.end(), executable) == addable.end())
+		executable = addable.empty() ? std::string() : addable.front();
+
+	if (!executable.empty()) {
+		auto *executable_list_array = obs_data_get_array(settings, SETTING_EXECUTABLE_LIST);
+
+		if (obs_data_array_count(executable_list_array) == 0) {
+			obs_data_array_release(executable_list_array);
+
+			executable_list_array = obs_data_array_create();
+			obs_data_set_array(settings, SETTING_EXECUTABLE_LIST, executable_list_array);
+		}
+
+		auto *executable_obj = obs_data_create();
+
+		obs_data_set_bool(executable_obj, "hidden", false);
+		obs_data_set_bool(executable_obj, "selected", false);
+		obs_data_set_string(executable_obj, "value", executable.c_str());
+
+		obs_data_array_push_back(executable_list_array, executable_obj);
+
+		obs_data_release(executable_obj);
 		obs_data_array_release(executable_list_array);
 
-		executable_list_array = obs_data_array_create();
-		obs_data_set_array(settings, SETTING_EXECUTABLE_LIST, executable_list_array);
+		// Mutating the settings object only feeds the UI; the live capture
+		// reads a cached config that only the source's update callback
+		// refreshes, so apply the change explicitly.
+		obs_source_update(source, nullptr);
 	}
-
-	const char *executable = obs_data_get_string(settings, SETTING_ACTIVE_SESSION_LIST);
-	auto *executable_obj = obs_data_create();
-
-	obs_data_set_bool(executable_obj, "hidden", false);
-	obs_data_set_bool(executable_obj, "selected", false);
-	obs_data_set_string(executable_obj, "value", executable);
-
-	obs_data_array_push_back(executable_list_array, executable_obj);
 
 	auto *active_session_list = obs_properties_get(ps, SETTING_ACTIVE_SESSION_LIST);
 	auto *active_session_add = obs_properties_get(ps, SETTING_ACTIVE_SESSION_ADD);
@@ -622,8 +677,6 @@ static bool session_add_callback(obs_properties_t *ps, obs_property_t *p, void *
 	ctx->FillActiveSessionList(active_session_list, active_session_add);
 	ctx->UpdateStatus(ps);
 
-	obs_data_release(executable_obj);
-	obs_data_array_release(executable_list_array);
 	obs_data_release(settings);
 
 	return true;
@@ -645,6 +698,29 @@ std::set<std::string> AudioCapture::GetExecutables(obs_data_t *settings)
 
 	obs_data_array_release(executable_list_array);
 	return executables;
+}
+
+// Executables the "Add" combo currently offers as enabled options, in the
+// same order FillActiveSessionList lists them.
+std::vector<std::string> AudioCapture::GetAddableExecutables(obs_data_t *settings)
+{
+	auto *monitor = SessionMonitor::Instance();
+	auto sessions = monitor ? monitor->GetSessions()
+				: std::unordered_map<SessionKey, std::string>{};
+	auto patterns = GetExecutables(settings);
+
+	std::set<std::string> unique;
+	for (auto &[key, executable] : sessions) {
+		if (!MatchesAnyExecutable(patterns, executable))
+			unique.insert(executable);
+	}
+
+	std::vector<std::string> addable(unique.begin(), unique.end());
+	std::sort(addable.begin(), addable.end(), [](const std::string &a, const std::string &b) {
+		return astrcmpi(a.c_str(), b.c_str()) < 0;
+	});
+
+	return addable;
 }
 
 void AudioCapture::FillActiveSessionList(obs_property_t *session_list, obs_property_t *session_add)
@@ -820,13 +896,18 @@ static obs_properties_t *audio_capture_properties(void *data)
 	obs_properties_add_button2(active_session_group, SETTING_ACTIVE_SESSION_REFRESH,
 				   TEXT_ACTIVE_SESSION_REFRESH, session_refresh_callback, ctx);
 
-	ctx->FillActiveSessionList(active_session_list, active_session_add);
+	// libobs may call get_properties with no instance (data == NULL), e.g.
+	// obs_get_source_properties() from scripts or frontends querying the
+	// source *type*; only instance-backed parts may touch ctx.
+	if (ctx)
+		ctx->FillActiveSessionList(active_session_list, active_session_add);
 
 	// Active session group
 	obs_properties_add_group(ps, SETTING_ACTIVE_SESSION_GROUP, TEXT_ACTIVE_SESSION_GROUP,
 				 OBS_GROUP_NORMAL, active_session_group);
 
-	ctx->UpdateStatus(ps);
+	if (ctx)
+		ctx->UpdateStatus(ps);
 
 	return ps;
 }
@@ -853,7 +934,12 @@ struct obs_source_info audio_capture_info = {
 	.id = "audio_capture",
 
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE,
+	// DO_NOT_SELF_MONITOR: exclude mode captures desktop-wide audio, which
+	// includes the monitoring device; without the flag, monitoring this
+	// source feeds it back into itself (same reason OBS's own desktop audio
+	// sources set it).
+	.output_flags = OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE |
+			OBS_SOURCE_DO_NOT_SELF_MONITOR,
 
 	.get_name = audio_capture_get_name,
 

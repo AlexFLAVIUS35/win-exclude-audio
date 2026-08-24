@@ -4,6 +4,7 @@
 #include <optional>
 #include <tuple>
 #include <set>
+#include <vector>
 
 #include <windows.h>
 #include <mmreg.h>
@@ -122,6 +123,7 @@ public:
 	std::set<DWORD> GetCapturedPids();
 	bool IsExcludeCapture();
 	std::set<std::string> GetExecutables(obs_data_t *settings);
+	std::vector<std::string> GetAddableExecutables(obs_data_t *settings);
 
 	bool IsUwpWindow(HWND window);
 	HWND GetUwpActualWindow(HWND parent_window);
