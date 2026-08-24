@@ -1,5 +1,64 @@
 # Changelog
 
+## 2.3.2 — unreleased
+
+### Fixed
+
+- **`obs_get_source_properties()` no longer crashes OBS.** libobs may call a
+  source's `get_properties` with no instance (scripts and frontends querying
+  the source *type*); the callback dereferenced the NULL context
+  unconditionally. Instance-backed parts of the dialog are now skipped when
+  there is no instance.
+- **The "Add executable" button now actually works.** Two independent bugs:
+  the added entry was never applied to the running capture (the settings were
+  mutated without `obs_source_update`, so the change only showed in the UI
+  until any other control was touched), and the value added was the combo's
+  *stored* setting — empty or stale when the user never touched the dropdown —
+  rather than what the widget displays. The button now applies the update
+  immediately and adds what the user actually sees.
+- **One broken audio endpoint no longer kills session monitoring.** A single
+  failing device during startup enumeration (half-removed devices, misbehaving
+  virtual cables) aborted the whole session monitor for the rest of the OBS
+  session; sessions never listed and session-mode capture silently never
+  started. Failing devices are now skipped, at startup and at hotplug alike.
+- **Exclude mode no longer feeds OBS's own audio back into the capture.** The
+  session-enumeration fallback treated OBS's own sessions (audio monitoring)
+  as capturable, and the source lacked `OBS_SOURCE_DO_NOT_SELF_MONITOR`, so
+  monitoring an exclude-mode source looped its audio into itself.
+- **Mixer timeline no longer drifts.** Frame↔duration conversions double-floored
+  on every tick, accumulating ~12–18 ms/hour of timestamp drift: a one-sample
+  silence gap every few seconds and an audible resync after hours of
+  continuous capture. The timeline is now derived from a fixed anchor with
+  single-floor 128-bit conversions, which also removes a `UINT64` overflow
+  after ~4 days of accumulated frames.
+- **Tree deduplication now sees whole ancestor chains.** Only the direct
+  parent of each audio session was considered, so a session-less intermediate
+  process (game → launcher → child) caused doubled audio in include mode and
+  leaks in exclude mode. Ancestors are now resolved against a full process
+  snapshot, bounded and cycle-guarded.
+- **Executable matching is Unicode-aware.** Case folding was byte-wise ASCII
+  over UTF-8 strings, so names containing accented or non-Latin letters never
+  matched case-insensitively the way Windows filenames do.
+- **Wedged WASAPI activations can no longer hang OBS shutdown.** The wait for
+  `ActivateAudioInterfaceAsync` was infinite and un-interruptible, and helper
+  teardown ran under the global helper-map lock — one stuck audio service call
+  could stall every other source and the plugin's unload. The wait is now
+  bounded and shutdown-aware, and helpers are destroyed outside the lock.
+- **Format-mismatched sources no longer read out of bounds.** Attaching a
+  second source with a different audio format to an existing capture helper
+  fed it raw frames sized for the other format; the mismatch is now refused
+  loudly instead of warned about and allowed.
+- **Remaining exception-safety gaps closed.** Non-COM exceptions on the
+  capture worker thread now log instead of terminating OBS, and a device
+  watcher that fails half-way through construction unregisters its WASAPI
+  callback instead of leaving it dangling.
+
+### Installer
+
+- Old zip installs inside the OBS installation directory are now removed on
+  install: OBS loads that legacy location first, so a stale DLL there silently
+  shadowed the new version.
+
 ## 2.3.1 — 2026-08-22
 
 ### Fixed
