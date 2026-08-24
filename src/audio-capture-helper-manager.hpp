@@ -1,6 +1,7 @@
 #pragma once
 
 #include <climits>
+#include <exception>
 #include <unordered_map>
 #include <tuple>
 #include <set>
@@ -76,23 +77,30 @@ public:
 				helpers.try_emplace(MakeKey(pid, exclude), mixer, format, pid, exclude);
 			if (!inserted) {
 				// Sources created before and after an OBS audio-settings
-				// change can carry different formats; the shared helper
-				// keeps the first one, so flag the mismatch instead of
-				// producing silently broken audio.
+				// change can carry different formats. The helper feeds the
+				// mixer raw frames sized by the helper's own format, so
+				// attaching a mismatched mixer would make SubmitPacket
+				// read/copy out of bounds - refuse instead.
 				auto existing = it->second.GetFormat();
 				if (existing.nChannels != format.nChannels ||
-				    existing.nSamplesPerSec != format.nSamplesPerSec)
-					warn("format mismatch on pid %lu helper "
-					     "(%u ch @ %lu Hz vs %u ch @ %lu Hz) - "
-					     "recreate the source or restart OBS",
-					     pid, existing.nChannels, existing.nSamplesPerSec,
-					     format.nChannels, format.nSamplesPerSec);
+				    existing.nSamplesPerSec != format.nSamplesPerSec) {
+					error("format mismatch on pid %lu helper "
+					      "(%u ch @ %lu Hz vs %u ch @ %lu Hz) - "
+					      "not attaching; recreate the source or restart OBS",
+					      pid, existing.nChannels, existing.nSamplesPerSec,
+					      format.nChannels, format.nSamplesPerSec);
+					return;
+				}
 
 				it->second.RegisterMixer(mixer);
 			}
 		} catch (const wil::ResultException &e) {
 			error("failed to create helper... update Windows?");
 			error("%s", e.what());
+		} catch (const std::exception &e) {
+			// Anything escaping here would unwind through the source's
+			// worker thread and std::terminate all of OBS.
+			error("failed to create helper for pid %lu: %s", pid, e.what());
 		}
 	};
 
@@ -105,7 +113,13 @@ public:
 			return;
 
 		auto remove_helper = it->second.UnRegisterMixer(mixer);
-		if (remove_helper)
-			helpers.erase(it);
+		if (!remove_helper)
+			return;
+
+		// ~AudioCaptureHelper joins its capture thread, which can be stuck
+		// inside a WASAPI call; release the map lock first so a slow helper
+		// teardown cannot stall every other source's register/unregister.
+		auto node = helpers.extract(it);
+		lock.reset();
 	};
 };

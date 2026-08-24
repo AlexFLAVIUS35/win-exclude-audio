@@ -84,7 +84,16 @@ void AudioCaptureHelper::InitClient()
 						    __uuidof(IAudioClient), &propvariant,
 						    completion_handler.Get(), &async_op));
 
-	completion_handler->event_finished.wait();
+	// Never wait unbounded on the audio service: a wedged activation would
+	// otherwise hang this thread forever, and with it our destructor's join
+	// and (transitively) every other source's helper registration. The
+	// refcounted completion handler safely outlives an abandoned wait.
+	HANDLE waits[] = {completion_handler->event_finished.get(),
+			  events[HelperEvents::Shutdown].get()};
+	auto wait_result = WaitForMultipleObjects(ARRAYSIZE(waits), waits, FALSE, 10000);
+	if (wait_result != WAIT_OBJECT_0)
+		THROW_WIN32(wait_result == WAIT_TIMEOUT ? ERROR_TIMEOUT : ERROR_CANCELLED);
+
 	THROW_IF_FAILED(completion_handler->activate_hr);
 
 	client = completion_handler->client;
