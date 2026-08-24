@@ -13,7 +13,7 @@
 
     NOTE: a self-signed certificate produces a technically valid signature but is NOT
     trusted by Windows or antivirus on other machines. For distribution you need a
-    CA-issued code-signing certificate (see SIGNING.md).
+    CA-issued code-signing certificate.
 
 .EXAMPLE
     # sign with a cert from the user store

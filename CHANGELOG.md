@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.1 — unreleased
+## 2.3.1 — 2026-08-22
 
 ### Fixed
 
@@ -184,13 +184,6 @@ audio captured, clean log). Based on upstream 2.2.3 (bozbez, 2022).
 - `Mixer::Tick` consumes the mix head in place instead of allocating a fresh vector 100
   times per second.
 - The silence path reuses a member buffer rather than allocating per packet.
-
-### Signing
-
-- Added a code-signing pipeline (`cmake/sign-plugin.ps1`): SHA-256 + RFC-3161 timestamp,
-  taking a certificate from the user store or a PFX. Currently exercised with a self-signed
-  development certificate; see `SIGNING.md` for obtaining a CA-issued certificate for
-  distribution.
 
 ### Documentation
 
