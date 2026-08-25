@@ -1,6 +1,30 @@
 # Changelog
 
-## 2.3.2 — unreleased
+## Unreleased
+
+### New
+
+- **Glitch resistance under load.** The capture threads and the mixer thread
+  now register with Windows' multimedia scheduler (MMCSS, "Pro Audio" class),
+  the same mechanism OBS uses for its own audio threads. Under CPU contention
+  (game + encoder) they keep their deadlines instead of getting starved, which
+  is where crackling and popping came from.
+- **The status line flags list entries that match nothing.** A typo'd
+  executable name used to fail silently forever; the properties dialog now
+  shows "No running session matches:" with the offending entries, so a wrong
+  name is distinguishable from an app that just is not playing yet.
+- **README: guide for apps that play audio from several processes** (Valorant
+  and League voice chat, the new Microsoft Teams, launcher/game splits), plus
+  the universal recipe for finding the right executable with the
+  active-sessions list.
+
+### Installer
+
+- Upgrades no longer inherit the install directory recorded by a 2.2.x-era
+  setup (`UsePreviousAppDir=no`): that path was inside the OBS root, where the
+  modern layout cannot be loaded from.
+
+## 2.3.2 — 2026-08-24
 
 ### Fixed
 
