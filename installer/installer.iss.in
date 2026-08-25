@@ -19,6 +19,10 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={commonappdata}\obs-studio\plugins\{#MyAppName}
+; Never reuse the directory recorded by an older install: 2.2.x-era setups
+; installed into the OBS root, and inheriting that path would put the modern
+; layout where OBS cannot load it.
+UsePreviousAppDir=no
 DisableDirPage=yes
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
