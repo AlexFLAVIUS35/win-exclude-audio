@@ -67,6 +67,18 @@ Restart OBS and add the **"Application Audio Output Capture"** source.
 
 **Hotkey mode** — switch the mode to *"Capture foreground window with hotkey"*, then assign the two hotkeys in **Settings → Hotkeys** under this source: *"Capture foreground window"* and *"Deactivate capture"*. (Those are the plugin's hotkeys — not the standard *Show*/*Hide* entries listed above them, which only toggle the source's visibility.) Focus the application you want and press the capture hotkey.
 
+### Apps that play audio from more than one process
+
+Some applications route part of their audio through a separate process with a different executable name, so one list entry does not cover everything:
+
+| Application | What's missing | What to add |
+| --- | --- | --- |
+| Valorant / League of Legends | voice chat plays from Riot's client, not the game | `Riot*.exe` (or use hotkey mode on the game) |
+| Microsoft Teams (new) | runs as its own process, not `Teams.exe` | `ms-teams.exe` |
+| Games behind launchers | launcher sounds vs. game audio are separate trees | one entry per executable |
+
+The universal trick: while the missing audio is actually playing, open the source's properties and check the **active sessions** dropdown — whatever process is producing that audio appears there under its real name; add it. The status line also lists entries that match no running session, which is usually a typo.
+
 ## Building
 
 Requirements: Visual Studio 2022 or later (MSVC C++ workload) and an installed copy of OBS Studio.
