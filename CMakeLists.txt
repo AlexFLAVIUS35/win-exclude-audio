@@ -145,7 +145,8 @@ target_link_libraries(win-capture-audio PRIVATE
     ole32       # COM
     mmdevapi    # ActivateAudioInterfaceAsync
     ksuser      # KSDATAFORMAT_SUBTYPE_* GUIDs
-    psapi)      # GetProcessImageFileNameW
+    psapi       # GetProcessImageFileNameW
+    avrt)       # MMCSS (AvSetMmThreadCharacteristics)
 
 target_compile_features(win-capture-audio PRIVATE cxx_std_20)
 

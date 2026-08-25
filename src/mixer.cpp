@@ -7,6 +7,7 @@
 #include <memory>
 #include <processthreadsapi.h>
 #include <threadpoollegacyapiset.h>
+#include <avrt.h>
 #include <winbase.h>
 #include <winuser.h>
 
@@ -165,6 +166,14 @@ void Mixer::Tick()
 
 void Mixer::Run()
 {
+	// Register with the multimedia scheduler: the 10ms tick has to hold its
+	// deadline under CPU contention or the output stutters (see also the
+	// THREAD_PRIORITY_HIGHEST fallback set by the constructor). Thread exit
+	// unregisters.
+	DWORD mmcss_task = 0;
+	if (!AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcss_task))
+		warn("MMCSS registration failed (%lu)", GetLastError());
+
 	// Force message queue creation
 	MSG msg;
 	PeekMessageA(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);

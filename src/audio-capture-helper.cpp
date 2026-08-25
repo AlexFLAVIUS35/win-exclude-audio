@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <functional>
 #include <windows.h>
+#include <avrt.h>
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -214,6 +215,13 @@ void AudioCaptureHelper::CaptureSafe()
 	// This thread does all the COM work; initialize COM here, not on the thread
 	// that constructed us.
 	auto couninit = wil::CoInitializeEx();
+
+	// Register with the multimedia scheduler so packet deadlines survive CPU
+	// contention (game + encoder): plain-priority threads getting starved is
+	// what audible crackling under load is made of. Thread exit unregisters.
+	DWORD mmcss_task = 0;
+	if (!AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcss_task))
+		warn("MMCSS registration failed (%lu)", GetLastError());
 
 	// The stream dies when the device changes or the target exits
 	// (AUDCLNT_E_DEVICE_INVALIDATED and friends). Retry until we are shut
