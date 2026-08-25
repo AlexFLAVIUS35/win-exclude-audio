@@ -52,6 +52,7 @@
 #define TEXT_STATUS_CAPTURING          obs_module_text("Status.Capturing")
 #define TEXT_STATUS_EXCLUDING          obs_module_text("Status.Excluding")
 #define TEXT_STATUS_NONE               obs_module_text("Status.None")
+#define TEXT_STATUS_NO_MATCH           obs_module_text("Status.NoMatch")
 
 #define TEXT_HOTKEY_START              obs_module_text("Hotkey.Start")
 #define TEXT_HOTKEY_STOP               obs_module_text("Hotkey.Stop")
@@ -119,6 +120,8 @@ public:
 	MakeSessionOptionStrings(std::set<DWORD> pids, const std::string &executable, bool added);
 
 	void FillActiveSessionList(obs_property_t *session_list, obs_property_t *session_add);
+	void AppendUnmatchedPatterns(std::string &text,
+				     const std::unordered_map<SessionKey, std::string> &sessions);
 	void UpdateStatus(obs_properties_t *ps);
 	std::set<DWORD> GetCapturedPids();
 	bool IsExcludeCapture();

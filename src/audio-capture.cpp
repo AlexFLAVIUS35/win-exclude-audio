@@ -778,15 +778,17 @@ void AudioCapture::UpdateStatus(obs_properties_t *ps)
 	if (!status)
 		return;
 
-	auto captured = GetCapturedPids();
-	if (captured.empty()) {
-		obs_property_set_description(status, TEXT_STATUS_NONE);
-		return;
-	}
-
 	auto *monitor = SessionMonitor::Instance();
 	auto sessions = monitor ? monitor->GetSessions()
 				: std::unordered_map<SessionKey, std::string>{};
+
+	auto captured = GetCapturedPids();
+	if (captured.empty()) {
+		std::string text = TEXT_STATUS_NONE;
+		AppendUnmatchedPatterns(text, sessions);
+		obs_property_set_description(status, text.c_str());
+		return;
+	}
 
 	std::set<std::string> names;
 	for (auto &[key, executable] : sessions) {
@@ -836,7 +838,47 @@ void AudioCapture::UpdateStatus(obs_properties_t *ps)
 		}
 	}
 
+	AppendUnmatchedPatterns(text, sessions);
 	obs_property_set_description(status, text.c_str());
+}
+
+// A typo'd executable name fails silently forever - the list accepts it and
+// nothing ever captures. Surface list entries that match no running session so
+// the user can tell a wrong name from an app that just is not playing yet.
+void AudioCapture::AppendUnmatchedPatterns(std::string &text,
+					   const std::unordered_map<SessionKey, std::string> &sessions)
+{
+	auto *settings = obs_source_get_settings(GetSource());
+
+	if (obs_data_get_int(settings, SETTING_MODE) != MODE_SESSION) {
+		obs_data_release(settings);
+		return;
+	}
+
+	auto patterns = GetExecutables(settings);
+	obs_data_release(settings);
+
+	std::string unmatched;
+	for (const auto &pattern : patterns) {
+		auto folded_pattern = Utf8ToLowerWide(pattern.c_str());
+
+		bool hit = false;
+		for (auto &[key, executable] : sessions) {
+			if (WildcardMatch(folded_pattern.c_str(),
+					  Utf8ToLowerWide(executable.c_str()).c_str())) {
+				hit = true;
+				break;
+			}
+		}
+
+		if (!hit) {
+			unmatched += unmatched.empty() ? "" : ", ";
+			unmatched += pattern;
+		}
+	}
+
+	if (!unmatched.empty())
+		text += std::format("\n{} {}", TEXT_STATUS_NO_MATCH, unmatched);
 }
 
 static obs_properties_t *audio_capture_properties(void *data)
