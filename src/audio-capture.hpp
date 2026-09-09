@@ -28,6 +28,7 @@
 
 #define SETTING_STATUS                 "status"
 
+#define TEXT_NAME                      obs_module_text("Name")
 #define TEXT_EXECUTABLE_LIST           obs_module_text("ExecutableList")
 
 #define TEXT_ACTIVE_SESSION_GROUP      obs_module_text("ActiveSession.Group")
