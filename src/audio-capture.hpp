@@ -36,7 +36,6 @@
 
 #define TEXT_MODE                      obs_module_text("Mode")
 #define TEXT_MODE_SESSION              obs_module_text("Mode.Session")
-#define TEXT_MODE_HOTKEY               obs_module_text("Mode.Hotkey")
 
 #define TEXT_EXECUTABLE_LIST           obs_module_text("ExecutableList")
 
@@ -66,13 +65,12 @@ namespace CaptureEvents {
 enum CaptureEvents { Shutdown = WM_USER, Update, SessionAdded, SessionExpired };
 }
 
-enum mode { MODE_SESSION, MODE_HOTKEY };
+enum mode { MODE_SESSION };
 
 struct AudioCaptureConfig {
 	enum mode mode = MODE_SESSION;
 
 	std::set<std::string> executables;
-	HWND hotkey_window = NULL;
 
 	bool exclude = false;
 };

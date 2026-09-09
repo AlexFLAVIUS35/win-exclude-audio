@@ -235,24 +235,6 @@ void AudioCapture::WorkerUpdate()
 	auto config = this->config;
 	config_lock.reset();
 
-	if (config.mode == MODE_HOTKEY) {
-		if (config.hotkey_window == NULL) {
-			StopCapture();
-			return;
-		}
-
-		DWORD pid = 0;
-		GetWindowThreadProcessId(config.hotkey_window, &pid);
-		if (pid == 0) {
-			// The window was destroyed since the hotkey was pressed.
-			StopCapture();
-			return;
-		}
-
-		StartCapture({pid}, false);
-		return;
-	}
-
 	auto *monitor = SessionMonitor::Instance();
 	if (!monitor) {
 		StopCapture();
@@ -383,8 +365,8 @@ void AudioCapture::Run()
 void AudioCapture::Update(obs_data_t *settings)
 {
 	AudioCaptureConfig new_config = {
-		.mode = (mode)obs_data_get_int(settings, SETTING_MODE),
-		.exclude = obs_data_get_bool(settings, SETTING_EXCLUDE),
+		.mode = MODE_SESSION,
+		.exclude = true,
 	};
 
 	if (new_config.mode == MODE_SESSION)
@@ -441,60 +423,6 @@ HWND AudioCapture::GetUwpActualWindow(HWND parent_window)
 	return NULL;
 }
 
-void AudioCapture::HotkeyStart()
-{
-	auto lock = config_section.lock();
-	auto config_copy = this->config;
-	lock.reset();
-
-	if (config_copy.mode != MODE_HOTKEY)
-		return;
-
-	auto window = GetForegroundWindow();
-	if (AudioCapture::IsUwpWindow(window))
-		window = AudioCapture::GetUwpActualWindow(window);
-
-	lock = config_section.lock();
-	config.hotkey_window = window;
-	lock.reset();
-
-	PostThreadMessageA(worker_tid, CaptureEvents::Update, NULL, NULL);
-}
-
-void AudioCapture::HotkeyStop()
-{
-	auto lock = config_section.lock();
-	if (config.mode != MODE_HOTKEY)
-		return;
-
-	config.hotkey_window = NULL;
-	lock.reset();
-
-	PostThreadMessageA(worker_tid, CaptureEvents::Update, NULL, NULL);
-}
-
-static bool hotkey_start(void *data, obs_hotkey_pair_id id, obs_hotkey_t *hotkey, bool pressed)
-{
-	if (!pressed)
-		return false;
-
-	auto *ctx = static_cast<AudioCapture *>(data);
-	ctx->HotkeyStart();
-
-	return true;
-}
-
-static bool hotkey_stop(void *data, obs_hotkey_pair_id id, obs_hotkey_t *hotkey, bool pressed)
-{
-	if (!pressed)
-		return false;
-
-	auto *ctx = static_cast<AudioCapture *>(data);
-	ctx->HotkeyStop();
-
-	return true;
-}
-
 AudioCapture::AudioCapture(obs_data_t *settings, obs_source_t *source) : source{source}
 {
 	mixer.emplace(source, helper_manager.GetFormat());
@@ -531,7 +459,6 @@ static void *audio_capture_create(obs_data_t *settings, obs_source_t *source)
 
 AudioCapture::~AudioCapture()
 {
-	obs_hotkey_pair_unregister(hotkey_pair);
 
 	if (auto *monitor = SessionMonitor::Instance())
 		monitor->UnRegisterEvent(worker_tid);
@@ -548,22 +475,6 @@ static void audio_capture_destroy(void *data)
 {
 	auto *ctx = static_cast<AudioCapture *>(data);
 	delete ctx;
-}
-
-static bool mode_callback(obs_properties_t *ps, obs_property_t *p, obs_data_t *settings)
-{
-	auto mode = obs_data_get_int(settings, SETTING_MODE);
-
-	p = obs_properties_get(ps, SETTING_EXECUTABLE_LIST);
-	obs_property_set_visible(p, mode == MODE_SESSION);
-
-	p = obs_properties_get(ps, SETTING_ACTIVE_SESSION_GROUP);
-	obs_property_set_visible(p, mode == MODE_SESSION);
-
-	p = obs_properties_get(ps, SETTING_EXCLUDE);
-	obs_property_set_visible(p, mode == MODE_SESSION);
-
-	return true;
 }
 
 std::tuple<std::string, std::string>
@@ -850,10 +761,6 @@ void AudioCapture::AppendUnmatchedPatterns(std::string &text,
 {
 	auto *settings = obs_source_get_settings(GetSource());
 
-	if (obs_data_get_int(settings, SETTING_MODE) != MODE_SESSION) {
-		obs_data_release(settings);
-		return;
-	}
 
 	auto patterns = GetExecutables(settings);
 	obs_data_release(settings);
@@ -890,14 +797,6 @@ static obs_properties_t *audio_capture_properties(void *data)
 	// Live status line ("Capturing: chrome.exe, spotify.exe")
 	obs_properties_add_text(ps, SETTING_STATUS, TEXT_STATUS_NONE, OBS_TEXT_INFO);
 
-	// Mode setting (specific session or hotkey)
-	auto *mode = obs_properties_add_list(ps, SETTING_MODE, TEXT_MODE, OBS_COMBO_TYPE_LIST,
-					     OBS_COMBO_FORMAT_INT);
-
-	obs_property_list_add_int(mode, TEXT_MODE_SESSION, MODE_SESSION);
-	obs_property_list_add_int(mode, TEXT_MODE_HOTKEY, MODE_HOTKEY);
-
-	obs_property_set_modified_callback(mode, mode_callback);
 
 	// Executable list setting
 	auto *executable_list =
@@ -906,8 +805,6 @@ static obs_properties_t *audio_capture_properties(void *data)
 
 	obs_property_set_modified_callback2(executable_list, executable_list_callback, ctx);
 
-	// Exclude setting
-	obs_properties_add_bool(ps, SETTING_EXCLUDE, TEXT_EXCLUDE);
 
 	// Latency setting
 	auto *latency = obs_properties_add_list(ps, SETTING_LATENCY, TEXT_LATENCY,
@@ -962,7 +859,7 @@ static void audio_capture_defaults(obs_data_t *settings)
 	obs_data_set_default_array(settings, SETTING_EXECUTABLE_LIST, executable_list);
 	obs_data_array_release(executable_list);
 
-	obs_data_set_default_bool(settings, SETTING_EXCLUDE, false);
+	obs_data_set_default_bool(settings, SETTING_EXCLUDE, true);
 	obs_data_set_default_int(settings, SETTING_LATENCY, 0);
 }
 
