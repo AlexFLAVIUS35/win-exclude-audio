@@ -86,7 +86,7 @@ public:
 	void Update(obs_data_t *settings);
 
 	std::tuple<std::string, std::string>
-	MakeSessionOptionStrings(std::set<DWORD> pids, const std::string &executable, bool added);
+	MakeSessionOptionStrings(std::set<DWORD> pids, const std::string &executable, bool added = false);
 
 	void FillActiveSessionList(obs_property_t *session_list, obs_property_t *session_add);
 	void AppendUnmatchedPatterns(std::string &text,
