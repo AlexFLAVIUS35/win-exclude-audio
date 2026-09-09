@@ -221,8 +221,6 @@ void AudioCapture::WorkerUpdate()
 	std::set<DWORD> exclude_pids;
 
 	for (auto &[key, executable] : sessions) {
-		// OBS's own output must never be captured when the source is doing
-		// desktop-wide exclusion. This prevents monitoring from feeding back.
 		if (key.pid == GetCurrentProcessId())
 			continue;
 
@@ -232,10 +230,6 @@ void AudioCapture::WorkerUpdate()
 			capture_pids.insert(key.pid);
 	}
 
-	// Preserve the original native process-loopback exclusion path. Windows
-	// can capture the whole system while excluding one process tree, which is
-	// what makes this source a true Desktop Audio replacement without a virtual
-	// audio cable.
 	if (!exclude_pids.empty()) {
 		auto excluded_roots = AudioCapture::DeDuplicateCaptureList(exclude_pids);
 
@@ -244,8 +238,6 @@ void AudioCapture::WorkerUpdate()
 			return;
 		}
 	} else {
-		// Keep whole-system capture alive even when none of the excluded apps is
-		// currently running. Exclude OBS itself so its monitoring is not captured.
 		StartCapture({GetCurrentProcessId()}, true);
 		return;
 	}
@@ -343,10 +335,10 @@ AudioCapture::AudioCapture(obs_data_t *settings, obs_source_t *source) : source{
 	Update(settings);
 }
 
-static void *audio_capture_create(void *settings, obs_source_t *source)
+static void *audio_capture_create(obs_data_t *settings, obs_source_t *source)
 {
 	try {
-		return new AudioCapture(static_cast<obs_data_t *>(settings), source);
+		return new AudioCapture(settings, source);
 	} catch (const wil::ResultException &e) {
 		error("failed to create context: %s", e.what());
 	} catch (const std::exception &e) {
