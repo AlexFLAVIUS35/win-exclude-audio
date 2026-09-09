@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
     tags: ['*']
-    # Documentation-only pushes have nothing to compile. Path filters are not
-    # evaluated for tag pushes, so releases always build regardless.
     paths-ignore:
       - '**.md'
       - 'LICENSE'
@@ -15,11 +13,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Oldest supported OBS: release binaries are built against these headers so
-  # obs_module_ver reports 28.0.0 and OBS 32's module-version gate
-  # ((ver & 0xFFFF0000) > LIBOBS_API_VER -> reject) accepts the plugin on
-  # every OBS release from 28 up. Building against a newer tag would make
-  # OBS 32.0/32.1 refuse to load it.
   OBS_VERSION: 28.0.0
 
 jobs:
@@ -36,8 +29,6 @@ jobs:
         shell: pwsh
         run: |
           $release = Invoke-RestMethod "https://api.github.com/repos/obsproject/obs-studio/releases/tags/$env:OBS_VERSION"
-          # Naming changed across releases: 28.x ships "OBS-Studio-28.0-Full-x64.zip",
-          # newer versions ship "OBS-Studio-<ver>-Windows.zip".
           $asset = $release.assets | Where-Object { $_.name -match '(Windows(-x64)?|Full-x64)\.zip$' } | Select-Object -First 1
           if (-not $asset) { throw "No Windows zip asset on obs-studio $env:OBS_VERSION" }
           Invoke-WebRequest $asset.browser_download_url -OutFile obs.zip
@@ -58,39 +49,45 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
 
-          # portable zip: extract into <obs>/... or %ProgramData%/obs-studio/plugins/
-          # Named with the project version so it matches the installer and release
-          # downloads from different versions stay distinguishable.
           $m = Select-String CMakeLists.txt -Pattern 'project\(win-capture-audio VERSION ([0-9.]+)'
           if (-not $m) { throw "Could not read the project version from CMakeLists.txt" }
           $version = $m.Matches[0].Groups[1].Value
+
+          # Keep the plugin's internal/DLL name as win-capture-audio for OBS
+          # compatibility, but publish this fork under its own product name.
           New-Item -ItemType Directory -Force stage/win-capture-audio | Out-Null
           Copy-Item build/release/* stage/win-capture-audio -Recurse
-          Compress-Archive stage/win-capture-audio "dist/win-capture-audio-$version.zip"
+          Compress-Archive stage/win-capture-audio "dist/win-exclude-audio-$version.zip"
 
-          # setup installer (Inno Setup is preinstalled on windows-latest)
+          # Build the real Inno Setup executable, then give the release asset
+          # the fork's product name. The installer itself remains a genuine
+          # installer generated from installer/installer.iss.in.
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Odist build\installer.generated.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+          $builtInstaller = Get-ChildItem dist -Filter "win-capture-audio-$version-setup.exe" -File | Select-Object -First 1
+          if (-not $builtInstaller) { throw "Inno Setup did not produce the expected installer" }
+          Move-Item $builtInstaller.FullName "dist/win-exclude-audio-$version-setup.exe"
+
           Copy-Item build/RelWithDebInfo/win-capture-audio.pdb dist/ -ErrorAction SilentlyContinue
-          Get-ChildItem dist -File | Get-FileHash -Algorithm SHA256 | Format-List Path, Hash
+
+          # Hash only the release payload. SHA256SUMS.txt itself is not hashed.
+          $lines = Get-ChildItem dist -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" }
+          Set-Content dist/SHA256SUMS.txt -Value $lines -Encoding ascii
+          Get-ChildItem dist -File | Select-Object Name, Length
+          Get-Content dist/SHA256SUMS.txt
 
       - name: Upload unsigned artifact
         id: upload-unsigned
         uses: actions/upload-artifact@v4
         with:
-          name: win-capture-audio-${{ github.sha }}
+          name: win-exclude-audio-${{ github.sha }}
           path: dist/
 
-  # Code signing via SignPath.io (free for open source).
-  # Activates once the SignPath OSS application is approved and these repository
-  # secrets exist: SIGNPATH_API_TOKEN, SIGNPATH_ORG_ID. Update the project /
-  # policy slugs below to match the SignPath project configuration.
   sign:
     needs: build
-    # Enable by setting the repository variable SIGNPATH_ENABLED to 'true' once the
-    # SignPath project exists and the secrets are in place. Until then this job is
-    # skipped and releases are published unsigned (the release job handles both).
     if: startsWith(github.ref, 'refs/tags/') && vars.SIGNPATH_ENABLED == 'true'
     runs-on: windows-latest
     steps:
@@ -108,13 +105,9 @@ jobs:
       - name: Upload signed artifact
         uses: actions/upload-artifact@v4
         with:
-          name: win-capture-audio-signed
+          name: win-exclude-audio-signed
           path: signed/
 
-  # Draft a GitHub Release on every tag with the artifacts and their checksums.
-  # Uses the SignPath-signed artifacts when signing succeeded, the unsigned CI
-  # build otherwise (so releases still work before SignPath approval). The
-  # release is created as a DRAFT: review the notes, then publish manually.
   release:
     needs: [build, sign]
     if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' }}
@@ -126,39 +119,29 @@ jobs:
         if: needs.sign.result == 'success'
         uses: actions/download-artifact@v4
         with:
-          name: win-capture-audio-signed
+          name: win-exclude-audio-signed
           path: dist
 
       - name: Download unsigned artifact
         if: needs.sign.result != 'success'
         uses: actions/download-artifact@v4
         with:
-          name: win-capture-audio-${{ github.sha }}
+          name: win-exclude-audio-${{ github.sha }}
           path: dist
-
-      - name: Generate checksums
-        shell: pwsh
-        run: |
-          # Collect the hashes first: writing SHA256SUMS.txt into the directory
-          # the pipeline is still enumerating makes Get-FileHash trip over the
-          # file it is being written to.
-          $lines = Get-ChildItem dist -File -Recurse |
-            Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash)  $(Split-Path $_.Path -Leaf)" }
-          Set-Content dist/SHA256SUMS.txt -Value $lines -Encoding ascii
-          Get-Content dist/SHA256SUMS.txt
 
       - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          name: win-capture-audio ${{ github.ref_name }}
+          name: win-exclude-audio ${{ github.ref_name }}
           files: dist/**
           body: |
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list of changes.
+            ## win-exclude-audio ${{ github.ref_name }}
 
-            **Install:** run `win-capture-audio-${{ github.ref_name }}-setup.exe` (removes any older version automatically), or extract the zip into `%ProgramData%\obs-studio\plugins\` for portable installs.
+            Exclude-only OBS application audio capture.
+
+            **Install:** run `win-exclude-audio-${{ github.ref_name }}-setup.exe`, or extract `win-exclude-audio-${{ github.ref_name }}.zip` into `%ProgramData%\obs-studio\plugins\` for a portable install.
 
             SHA-256 checksums are attached as `SHA256SUMS.txt`.
             ${{ needs.sign.result != 'success' && '
-            > **These binaries are not code-signed yet.** Windows SmartScreen may warn you when running the installer — choose "More info" → "Run anyway". You can verify the download against `SHA256SUMS.txt` in the meantime.' || '' }}
+            > **These binaries are not code-signed yet.** Windows SmartScreen may warn you when running the installer. You can verify the download against `SHA256SUMS.txt`.' || '' }}
