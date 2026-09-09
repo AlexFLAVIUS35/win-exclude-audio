@@ -26,10 +26,7 @@
 #define SETTING_ACTIVE_SESSION_ADD     "active_session_add"
 #define SETTING_ACTIVE_SESSION_REFRESH "active_session_refresh"
 
-#define SETTING_LATENCY                "latency"
 #define SETTING_STATUS                 "status"
-
-#define TEXT_NAME                      obs_module_text("Name")
 
 #define TEXT_EXECUTABLE_LIST           obs_module_text("ExecutableList")
 
@@ -38,11 +35,8 @@
 #define TEXT_ACTIVE_SESSION_ADD        obs_module_text("ActiveSession.Add")
 #define TEXT_ACTIVE_SESSION_REFRESH    obs_module_text("ActiveSession.Refresh")
 
-#define TEXT_LATENCY                   obs_module_text("Latency")
-#define TEXT_LATENCY_NORMAL            obs_module_text("Latency.Normal")
-#define TEXT_LATENCY_LOW               obs_module_text("Latency.Low")
 #define TEXT_STATUS_CAPTURING          obs_module_text("Status.Capturing")
-#define TEXT_STATUS_EXCLUDING         obs_module_text("Status.Excluding")
+#define TEXT_STATUS_EXCLUDING          obs_module_text("Status.Excluding")
 #define TEXT_STATUS_NONE               obs_module_text("Status.None")
 #define TEXT_STATUS_NO_MATCH           obs_module_text("Status.NoMatch")
 
@@ -69,20 +63,16 @@ private:
 
 	std::optional<Mixer> mixer;
 
-	// Owned by the worker thread; pids_section guards the writes so the UI
-	// thread can snapshot it for the status line.
 	wil::critical_section pids_section;
 	std::set<DWORD> pids;
 
-	// Always true for this plugin: `pids` holds the process tree being
-	// excluded and the helper captures everything else.
+	// This plugin always uses process-loopback exclusion when the native
+	// single-tree path is available.
 	bool capture_exclude = false;
 
 	void StartCapture(const std::set<DWORD> &new_pids, bool exclude);
 	void StopCapture();
-
 	void WorkerUpdate();
-
 	bool Tick(const MSG &msg);
 	void Run();
 
