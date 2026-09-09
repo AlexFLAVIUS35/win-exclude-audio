@@ -15,7 +15,7 @@ MODULE_EXPORT const char *obs_module_name(void)
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "Application Audio Output Capture";
+	return "Application Audio Exclusion";
 }
 
 extern struct obs_source_info audio_capture_info;
